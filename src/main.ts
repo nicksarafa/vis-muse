@@ -117,8 +117,11 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 	uniform float boundsY;
 	uniform float boundsZ;
 	uniform float restitution;
-	uniform vec3 wanderCenter;
-	uniform float wanderStrength;
+	uniform vec3 c0;
+	uniform vec3 c1;
+	uniform vec3 c2;
+	uniform vec3 c3;
+	uniform vec4 cWts;
 	
 	vec3 hash3(vec3 p){
 		p = vec3(dot(p,vec3(127.1,311.7,74.7)), dot(p,vec3(269.5,183.3,246.1)), dot(p,vec3(113.5,271.9,124.6)));
@@ -224,8 +227,11 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 		float morph = clamp(0.35 + (audioEnergy*energyMult)*1.0 + (audioBass*bassMult)*1.0, 0.0, 2.0);
 		force += normalize(towardTarget) * morph * 0.9;
 		
-		// Moving center of gravity
-		force += normalize(wanderCenter - pos.xyz) * wanderStrength;
+		// Multiple moving centers across the full screen
+		force += normalize(c0 - pos.xyz) * cWts.x;
+		force += normalize(c1 - pos.xyz) * cWts.y;
+		force += normalize(c2 - pos.xyz) * cWts.z;
+		force += normalize(c3 - pos.xyz) * cWts.w;
 		
 		// Center spring keeps distribution symmetric
 		force += -pos.xyz * centerSpring;
@@ -301,8 +307,11 @@ gpu.setVariableDependencies(velocityVariable, [positionVariable, velocityVariabl
 (positionVariable.material.uniforms as any).boundsY = { value: 0.95 };
 (positionVariable.material.uniforms as any).boundsZ = { value: 0.95 };
 (positionVariable.material.uniforms as any).restitution = { value: 0.8 };
-(positionVariable.material.uniforms as any).wanderCenter = { value: new THREE.Vector3() };
-(positionVariable.material.uniforms as any).wanderStrength = { value: 0.8 };
+(positionVariable.material.uniforms as any).c0 = { value: new THREE.Vector3() };
+(positionVariable.material.uniforms as any).c1 = { value: new THREE.Vector3() };
+(positionVariable.material.uniforms as any).c2 = { value: new THREE.Vector3() };
+(positionVariable.material.uniforms as any).c3 = { value: new THREE.Vector3() };
+(positionVariable.material.uniforms as any).cWts = { value: new THREE.Vector4(1.0, 0.8, 0.6, 0.5) };
 
 gpu.init();
 
@@ -379,7 +388,7 @@ function applyProfile(pf: VisualProfile){
 	const rad = getViewRadius();
 	particleMaterial.uniforms.colorA.value.set(pf.colorA);
 	particleMaterial.uniforms.colorB.value.set(pf.colorB);
-	particleMaterial.uniforms.pointSize.value = pf.pointSize;
+	particleMaterial.uniforms.pointSize.value = Math.min(1.4, pf.pointSize);
 	(positionVariable.material.uniforms as any).damping.value = pf.damping;
 	(positionVariable.material.uniforms as any).noiseScale.value = pf.noiseScale;
 	(positionVariable.material.uniforms as any).shapeType.value = pf.shapeType;
@@ -390,12 +399,13 @@ function applyProfile(pf: VisualProfile){
 	(positionVariable.material.uniforms as any).centerAttract.value = pf.centerAttract;
 	(positionVariable.material.uniforms as any).centerSpring.value = Math.max(0.05, pf.centerAttract * 0.2);
 	(positionVariable.material.uniforms as any).swirl.value = pf.swirl;
-	(positionVariable.material.uniforms as any).boundsX.value = pf.boundsX * rad;
-	(positionVariable.material.uniforms as any).boundsY.value = pf.boundsY * rad;
+	// Use full half-extents for bounds (no inner box)
+	(positionVariable.material.uniforms as any).boundsX.value = ortho.right * pf.boundsX;
+	(positionVariable.material.uniforms as any).boundsY.value = ortho.top * pf.boundsY;
 	(positionVariable.material.uniforms as any).boundsZ.value = pf.boundsZ * rad;
 	(positionVariable.material.uniforms as any).restitution.value = pf.restitution;
 	hudProfileName.textContent = `Profile ${pf.name}`;
-	basePointSize = pf.pointSize;
+	basePointSize = Math.min(1.4, pf.pointSize);
 	baseDamping = pf.damping;
 	// Populate dock inputs
 	sizeRange.value = String(pf.pointSize);
@@ -439,8 +449,8 @@ colorBEl.oninput = () => { particleMaterial.uniforms.colorB.value.set(colorBEl.v
 energyMultEl.oninput = () => { (positionVariable.material.uniforms as any).energyMult.value = parseFloat(energyMultEl.value); };
 bassMultEl.oninput = () => { (positionVariable.material.uniforms as any).bassMult.value = parseFloat(bassMultEl.value); };
 kickMultEl.oninput = () => { (positionVariable.material.uniforms as any).kickMult.value = parseFloat(kickMultEl.value); };
-boundsXRange.oninput = () => { (positionVariable.material.uniforms as any).boundsX.value = parseFloat(boundsXRange.value) * getViewRadius(); };
-boundsYRange.oninput = () => { (positionVariable.material.uniforms as any).boundsY.value = parseFloat(boundsYRange.value) * getViewRadius(); };
+boundsXRange.oninput = () => { (positionVariable.material.uniforms as any).boundsX.value = parseFloat(boundsXRange.value) * ortho.right; };
+boundsYRange.oninput = () => { (positionVariable.material.uniforms as any).boundsY.value = parseFloat(boundsYRange.value) * ortho.top; };
 centerRange.oninput = () => { (positionVariable.material.uniforms as any).centerAttract.value = parseFloat(centerRange.value); (positionVariable.material.uniforms as any).centerSpring.value = Math.max(0.05, parseFloat(centerRange.value) * 0.2); };
 if (randomBtn) randomBtn.onclick = () => { current = Math.floor(Math.random()*profiles.length); applyProfile(profiles[current]); resetSimulation(); };
 
@@ -449,8 +459,8 @@ function resize(){
 	renderer.setSize(window.innerWidth, window.innerHeight);
 	setupCamera();
 	const rad = getViewRadius();
-	(positionVariable.material.uniforms as any).boundsX.value = profiles[current].boundsX * rad;
-	(positionVariable.material.uniforms as any).boundsY.value = profiles[current].boundsY * rad;
+	(positionVariable.material.uniforms as any).boundsX.value = profiles[current].boundsX * ortho.right;
+	(positionVariable.material.uniforms as any).boundsY.value = profiles[current].boundsY * ortho.top;
 	(positionVariable.material.uniforms as any).boundsZ.value = profiles[current].boundsZ * rad;
 	(positionVariable.material.uniforms as any).shapeA.value = profiles[current].shapeA * rad;
 	(positionVariable.material.uniforms as any).shapeB.value = profiles[current].shapeB * rad;
@@ -491,11 +501,17 @@ function animate(){
 	(positionVariable.material.uniforms as any).time.value = t;
 	(positionVariable.material.uniforms as any).interactionStrength.value = 0.0;
 	
-	// Move center of gravity across the full viewport with a lissajous-like path
-	const rad = getViewRadius()*0.9;
-	const wx = Math.sin(t*0.23) * rad;
-	const wy = Math.sin(t*0.31 + Math.sin(t*0.11)*0.8) * rad;
-	(positionVariable.material.uniforms as any).wanderCenter.value.set(wx, wy, 0);
+	// Move multiple centers across full viewport (lissajous-like paths)
+	const rad = getViewRadius()*0.95;
+	const hw = ortho.right, hh = ortho.top;
+	const c0 = new THREE.Vector3(Math.sin(t*0.21)*hw, Math.cos(t*0.27)*hh, 0);
+	const c1 = new THREE.Vector3(Math.sin(t*0.34+1.1)*hw, Math.sin(t*0.19+0.6)*hh, 0);
+	const c2 = new THREE.Vector3(Math.cos(t*0.15+2.0)*hw, Math.sin(t*0.41+1.7)*hh, 0);
+	const c3 = new THREE.Vector3(Math.sin(t*0.52+0.4)*hw, Math.cos(t*0.36+0.9)*hh, 0);
+	(positionVariable.material.uniforms as any).c0.value.copy(c0);
+	(positionVariable.material.uniforms as any).c1.value.copy(c1);
+	(positionVariable.material.uniforms as any).c2.value.copy(c2);
+	(positionVariable.material.uniforms as any).c3.value.copy(c3);
 	
 	const now = performance.now();
 	const dt = now - lastNow; lastNow = now;
@@ -517,7 +533,7 @@ function animate(){
 	(positionVariable.material.uniforms as any).audioKick.value = kick;
 	(positionVariable.material.uniforms as any).audioBass.value = bass;
 	// Pump point size and reduce damping slightly with energy/bass
-	particleMaterial.uniforms.pointSize.value = basePointSize * (1.0 + energy*0.8 + kick*0.6);
+	particleMaterial.uniforms.pointSize.value = Math.min(1.8, basePointSize * (1.0 + energy*0.5 + kick*0.4));
 	(positionVariable.material.uniforms as any).damping.value = Math.max(0.85, baseDamping - (energy*0.06 + bass*0.08));
 	
 	gpu.compute();
