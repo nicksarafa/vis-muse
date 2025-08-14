@@ -69,6 +69,14 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 	uniform sampler2D texturePosition;
 	uniform sampler2D textureVelocity;
 	uniform vec2 resolution;
+	// Sacred geometry target params
+	uniform float shapeType;
+	uniform float shapeA;
+	uniform float shapeB;
+	uniform float shapeC;
+	uniform float boundsRadius;
+	uniform float centerAttract;
+	uniform float swirl;
 	
 	vec3 hash3(vec3 p){
 		p = vec3(dot(p,vec3(127.1,311.7,74.7)), dot(p,vec3(269.5,183.3,246.1)), dot(p,vec3(113.5,271.9,124.6)));
@@ -96,23 +104,83 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 		return mix(nxy0, nxy1, u.z);
 	}
 	
+	vec3 targetSphere(vec3 p){
+		float r = shapeA; // radius
+		return normalize(p) * r;
+	}
+	vec3 targetTorus(vec3 p){
+		float R = shapeA; float r = shapeB;
+		float qx = length(p.xz);
+		vec3 q = vec3(qx - R, p.y, 0.0);
+		return normalize(q) * r + vec3((R)*p.x/ max(1e-4,qx), 0.0, (R)*p.z/ max(1e-4,qx));
+	}
+	vec3 targetPhyllo(vec3 p){
+		float n = shapeC; // petals density
+		float i = (p.x + p.y + p.z + time*0.1) * 200.0;
+		float phi = 3.883222077; // golden angle
+		float r = sqrt(i)/sqrt(n)*shapeA;
+		float a = i*phi;
+		return vec3(r*cos(a), (noise(p*1.3)-0.5)*shapeB, r*sin(a));
+	}
+	vec3 targetRose(vec3 p){
+		float k = shapeC; // rose parameter
+		float a = atan(p.z, p.x);
+		float r = shapeA * cos(k*a);
+		return vec3(r*cos(a), (noise(p*1.1)-0.5)*shapeB, r*sin(a));
+	}
+	vec3 targetLissajous(vec3 p){
+		float ax = shapeA; float ay = shapeB; float az = 1.0;
+		float t = (p.x + p.y + p.z) + time*0.5;
+		return vec3(sin(ax*t), sin(ay*t+1.57), sin(az*t+0.78)) * 0.9;
+	}
+	vec3 targetSpiral(vec3 p){
+		float t = atan(p.z, p.x);
+		float h = p.y;
+		float r = shapeA + shapeB*h;
+		return vec3(r*cos(t*shapeC), h*0.6, r*sin(t*shapeC));
+	}
+	
+	vec3 getTarget(vec3 p){
+		if (shapeType < 0.5) return targetSphere(p);
+		else if (shapeType < 1.5) return targetTorus(p);
+		else if (shapeType < 2.5) return targetPhyllo(p);
+		else if (shapeType < 3.5) return targetRose(p);
+		else if (shapeType < 4.5) return targetLissajous(p);
+		else return targetSpiral(p);
+	}
+	
 	void main() {
 		vec2 uv = gl_FragCoord.xy / resolution.xy;
 		vec4 pos = texture2D(texturePosition, uv);
 		vec4 vel = texture2D(textureVelocity, uv);
 		
-		// Interaction force towards/away from pointer attractor
+		// Base forces
 		vec3 dir = attractor - pos.xyz;
 		float dist = length(dir) + 1e-4;
 		vec3 force = normalize(dir) * interactionStrength / (1.0 + dist*dist);
 		
-		// Curl-like noise drift affected by audio
+		// Sacred geometry attraction (morphs with audio)
+		vec3 target = getTarget(pos.xyz);
+		vec3 towardTarget = (target - pos.xyz);
+		float morph = clamp(0.25 + audioEnergy*0.9 + audioBass*0.9, 0.0, 1.8);
+		force += normalize(towardTarget) * morph * 0.8;
+		
+		// Confinement: centripetal pull to keep within boundsRadius
+		float rad = boundsRadius + audioEnergy*0.6 + audioBass*0.6;
+		float dCenter = max(0.0, length(pos.xyz) - rad);
+		force += -normalize(pos.xyz) * dCenter * centerAttract;
+		
+		// Swirl around Y, stronger with audio
+		float w = swirl * (0.2 + audioEnergy*0.8 + audioBass*0.6);
+		force += vec3(-pos.z, 0.0, pos.x) * w * 0.05;
+		
+		// Organic drift
 		vec3 n = vec3(
 			noise(pos.xyz * noiseScale + time*0.15),
 			noise(pos.yzx * noiseScale + time*0.17),
 			noise(pos.zxy * noiseScale + time*0.13)
 		);
-		float audioScale = 1.2 + audioEnergy*2.2 + audioBass*2.5;
+		float audioScale = 1.0 + audioEnergy*1.6 + audioBass*1.8;
 		force += (n - 0.5) * audioScale;
 		
 		// Velocity update
@@ -124,7 +192,7 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 		// Integrate
 		pos.xyz += vel.xyz * 0.016;
 		
-		// Soft bounds
+		// Hard bounds clamp as safety
 		pos.xyz = clamp(pos.xyz, vec3(-8.0), vec3(8.0));
 		
 		gl_FragColor = pos;
@@ -150,6 +218,13 @@ gpu.setVariableDependencies(velocityVariable, [positionVariable, velocityVariabl
 (positionVariable.material.uniforms as any).audioKick = { value: 0.0 };
 (positionVariable.material.uniforms as any).audioEnergy = { value: 0.0 };
 (positionVariable.material.uniforms as any).audioBass = { value: 0.0 };
+(positionVariable.material.uniforms as any).shapeType = { value: 0.0 };
+(positionVariable.material.uniforms as any).shapeA = { value: 1.0 };
+(positionVariable.material.uniforms as any).shapeB = { value: 0.5 };
+(positionVariable.material.uniforms as any).shapeC = { value: 3.0 };
+(positionVariable.material.uniforms as any).boundsRadius = { value: 1.4 };
+(positionVariable.material.uniforms as any).centerAttract = { value: 1.2 };
+(positionVariable.material.uniforms as any).swirl = { value: 0.4 };
 
 gpu.init();
 
@@ -228,6 +303,13 @@ function applyProfile(pf: VisualProfile){
 	particleMaterial.uniforms.pointSize.value = pf.pointSize;
 	(positionVariable.material.uniforms as any).damping.value = pf.damping;
 	(positionVariable.material.uniforms as any).noiseScale.value = pf.noiseScale;
+	(positionVariable.material.uniforms as any).shapeType.value = pf.shapeType;
+	(positionVariable.material.uniforms as any).shapeA.value = pf.shapeA;
+	(positionVariable.material.uniforms as any).shapeB.value = pf.shapeB;
+	(positionVariable.material.uniforms as any).shapeC.value = pf.shapeC;
+	(positionVariable.material.uniforms as any).boundsRadius.value = pf.boundsRadius;
+	(positionVariable.material.uniforms as any).centerAttract.value = pf.centerAttract;
+	(positionVariable.material.uniforms as any).swirl.value = pf.swirl;
 	hudProfileName.textContent = `Profile ${pf.name}`;
 	basePointSize = pf.pointSize;
 	baseDamping = pf.damping;
