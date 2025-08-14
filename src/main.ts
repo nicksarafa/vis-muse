@@ -111,11 +111,14 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 	uniform float shapeC;
 	uniform float boundsRadius;
 	uniform float centerAttract;
+	uniform float centerSpring;
 	uniform float swirl;
 	uniform float boundsX;
 	uniform float boundsY;
 	uniform float boundsZ;
 	uniform float restitution;
+	uniform vec3 wanderCenter;
+	uniform float wanderStrength;
 	
 	vec3 hash3(vec3 p){
 		p = vec3(dot(p,vec3(127.1,311.7,74.7)), dot(p,vec3(269.5,183.3,246.1)), dot(p,vec3(113.5,271.9,124.6)));
@@ -210,14 +213,23 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 		// Sacred geometry attraction (morphs with audio) using param UVs
 		vec2 jitter = (hash2(uv*4375.85)*2.0-1.0) / resolution * 3.0;
 		vec2 q = clamp(uv + jitter, 0.0, 1.0);
-		vec3 target = getTargetUV(q);
+		vec3 shapeTarget = getTargetUV(q);
 		float breath = 1.0 + (audioEnergy*energyMult)*0.4 + (audioBass*bassMult)*0.3 + sin(time*0.5)*0.05;
-		target *= breath;
+		shapeTarget *= breath;
+		// Screen-centered plane target mapped from UV so particles fill the viewport symmetrically
+		vec2 nd = uv * 2.0 - 1.0; // [-1,1]
+		vec3 planeTarget = vec3(nd.x * boundsX, nd.y * boundsY, 0.0);
+		vec3 target = mix(planeTarget, shapeTarget, 0.6);
 		vec3 towardTarget = (target - pos.xyz);
 		float morph = clamp(0.35 + (audioEnergy*energyMult)*1.0 + (audioBass*bassMult)*1.0, 0.0, 2.0);
 		force += normalize(towardTarget) * morph * 0.9;
 		
-		// Confinement: centripetal pull to keep within boundsRadius
+		// Moving center of gravity
+		force += normalize(wanderCenter - pos.xyz) * wanderStrength;
+		
+		// Center spring keeps distribution symmetric
+		force += -pos.xyz * centerSpring;
+		// Confinement: centripetal pull outside soft radius
 		float rad = boundsRadius + audioEnergy*0.6 + audioBass*0.6;
 		float dCenter = max(0.0, length(pos.xyz) - rad);
 		force += -normalize(pos.xyz) * dCenter * centerAttract;
@@ -252,9 +264,6 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 		if (pos.z > boundsZ) { pos.z = boundsZ; vel.z = -abs(vel.z) * restitution; }
 		else if (pos.z < -boundsZ) { pos.z = -boundsZ; vel.z = abs(vel.z) * restitution; }
 		
-		// Safety clamp
-		pos.xyz = clamp(pos.xyz, vec3(-8.0), vec3(8.0));
-		
 		gl_FragColor = pos;
 	}
 `, dtPosition);
@@ -286,11 +295,14 @@ gpu.setVariableDependencies(velocityVariable, [positionVariable, velocityVariabl
 (positionVariable.material.uniforms as any).shapeC = { value: 3.0 };
 (positionVariable.material.uniforms as any).boundsRadius = { value: 0.95 };
 (positionVariable.material.uniforms as any).centerAttract = { value: 1.0 };
+(positionVariable.material.uniforms as any).centerSpring = { value: 0.25 };
 (positionVariable.material.uniforms as any).swirl = { value: 0.5 };
 (positionVariable.material.uniforms as any).boundsX = { value: 0.95 };
 (positionVariable.material.uniforms as any).boundsY = { value: 0.95 };
 (positionVariable.material.uniforms as any).boundsZ = { value: 0.95 };
 (positionVariable.material.uniforms as any).restitution = { value: 0.8 };
+(positionVariable.material.uniforms as any).wanderCenter = { value: new THREE.Vector3() };
+(positionVariable.material.uniforms as any).wanderStrength = { value: 0.8 };
 
 gpu.init();
 
@@ -376,6 +388,7 @@ function applyProfile(pf: VisualProfile){
 	(positionVariable.material.uniforms as any).shapeC.value = pf.shapeC;
 	(positionVariable.material.uniforms as any).boundsRadius.value = pf.boundsRadius * rad;
 	(positionVariable.material.uniforms as any).centerAttract.value = pf.centerAttract;
+	(positionVariable.material.uniforms as any).centerSpring.value = Math.max(0.05, pf.centerAttract * 0.2);
 	(positionVariable.material.uniforms as any).swirl.value = pf.swirl;
 	(positionVariable.material.uniforms as any).boundsX.value = pf.boundsX * rad;
 	(positionVariable.material.uniforms as any).boundsY.value = pf.boundsY * rad;
@@ -428,7 +441,7 @@ bassMultEl.oninput = () => { (positionVariable.material.uniforms as any).bassMul
 kickMultEl.oninput = () => { (positionVariable.material.uniforms as any).kickMult.value = parseFloat(kickMultEl.value); };
 boundsXRange.oninput = () => { (positionVariable.material.uniforms as any).boundsX.value = parseFloat(boundsXRange.value) * getViewRadius(); };
 boundsYRange.oninput = () => { (positionVariable.material.uniforms as any).boundsY.value = parseFloat(boundsYRange.value) * getViewRadius(); };
-centerRange.oninput = () => { (positionVariable.material.uniforms as any).centerAttract.value = parseFloat(centerRange.value); };
+centerRange.oninput = () => { (positionVariable.material.uniforms as any).centerAttract.value = parseFloat(centerRange.value); (positionVariable.material.uniforms as any).centerSpring.value = Math.max(0.05, parseFloat(centerRange.value) * 0.2); };
 if (randomBtn) randomBtn.onclick = () => { current = Math.floor(Math.random()*profiles.length); applyProfile(profiles[current]); resetSimulation(); };
 
 // Update bounds on resize
@@ -478,6 +491,12 @@ function animate(){
 	(positionVariable.material.uniforms as any).time.value = t;
 	(positionVariable.material.uniforms as any).interactionStrength.value = 0.0;
 	
+	// Move center of gravity across the full viewport with a lissajous-like path
+	const rad = getViewRadius()*0.9;
+	const wx = Math.sin(t*0.23) * rad;
+	const wy = Math.sin(t*0.31 + Math.sin(t*0.11)*0.8) * rad;
+	(positionVariable.material.uniforms as any).wanderCenter.value.set(wx, wy, 0);
+	
 	const now = performance.now();
 	const dt = now - lastNow; lastNow = now;
 	const inst = dt > 0 ? 1000 / dt : 60;
@@ -506,7 +525,7 @@ function animate(){
 	particleMaterial.uniforms.texPosition.value = gpu.getCurrentRenderTarget(positionVariable).texture;
 	renderer.render(scene, ortho);
 }
-animate(); 
+animate();
 
 // Expose console API
 (window as any).vis = {
