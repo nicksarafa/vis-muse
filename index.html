@@ -31,10 +31,21 @@
             <label>Center Attract <input id="centerRange" type="range" min="0.2" max="3.0" step="0.05"></label>
           </div>
           <div class="group">
-            <label>Spread (global) <input id="spreadGlobal" type="range" min="0.8" max="3.0" step="0.05"></label>
-            <label>Force Gain <input id="forceGain" type="range" min="0.1" max="4.0" step="0.05"></label>
-            <label>Velocity Gain <input id="velGain" type="range" min="0.1" max="3.0" step="0.05"></label>
-            <label>Particle Density <input id="density" type="range" min="0.05" max="1.0" step="0.01"></label>
+            <label>Visual Scale <input id="scaleRange" type="range" min="0.8" max="3.0" step="0.05" value="1.0"></label>
+            <label>Force Gain <input id="forceGain" type="range" min="0.1" max="4.0" step="0.05" value="1.0"></label>
+            <label>Velocity Gain <input id="velGain" type="range" min="0.1" max="3.0" step="0.05" value="1.0"></label>
+            <label>Particle Density <input id="density" type="range" min="0.05" max="1.0" step="0.01" value="1.0"></label>
+            <label>Particle Side <input id="particleSide" type="range" min="500" max="1000" step="50"></label>
+          </div>
+          <div class="group">
+            <label>Mirror Mode
+              <select id="mirrorMode">
+                <option value="none">None</option>
+                <option value="x">Mirror X</option>
+                <option value="y">Mirror Y</option>
+                <option value="xy">Mirror X+Y</option>
+              </select>
+            </label>
           </div>
           <div class="group">
             <label>Shape

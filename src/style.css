@@ -15,7 +15,7 @@ body {
 }
 #stats {
 	position: fixed;
-	top: 12px; left: 12px;
+	top: 12px; right: 12px; left: auto;
 	padding: 6px 10px;
 	font-size: 12px;
 	background: rgba(0,0,0,0.35);
@@ -25,6 +25,7 @@ body {
 	pointer-events: none;
 	user-select: none;
 	min-width: 160px;
+	text-align: right;
 }
 #dock { position: fixed; top: 0; bottom: 0; left: 0; width: 300px; transform: translateX(-280px); transition: transform 0.25s ease; z-index: 10; pointer-events: none; }
 #dock.open { transform: translateX(0); }

@@ -31,6 +31,8 @@ const kickMultEl = document.getElementById('kickMult') as HTMLInputElement | nul
 const boundsXRange = document.getElementById('boundsXRange') as HTMLInputElement;
 const boundsYRange = document.getElementById('boundsYRange') as HTMLInputElement;
 const centerRange = document.getElementById('centerRange') as HTMLInputElement;
+const mirrorModeEl = document.getElementById('mirrorMode') as HTMLSelectElement | null;
+const particleSideEl = document.getElementById('particleSide') as HTMLInputElement | null;
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -58,13 +60,13 @@ function getViewRadius(){
 const clock = new THREE.Clock();
 
 // Particle simulation settings
-const PARTICLES_SIDE = 512; // 262,144 particles
-const PARTICLE_COUNT = PARTICLES_SIDE * PARTICLES_SIDE;
+let PARTICLES_SIDE = 512; // 262,144 particles
+let PARTICLE_COUNT = PARTICLES_SIDE * PARTICLES_SIDE;
 
 // GPU Computation
 const gpu = new GPUComputationRenderer(PARTICLES_SIDE, PARTICLES_SIDE, renderer);
-const dtPosition = gpu.createTexture();
-const dtVelocity = gpu.createTexture();
+let dtPosition = gpu.createTexture();
+let dtVelocity = gpu.createTexture();
 
 function seedTextures(radius: number) {
 	const posArray = dtPosition.image.data;
@@ -122,6 +124,10 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 	uniform vec3 c2;
 	uniform vec3 c3;
 	uniform vec4 cWts;
+	uniform float scaleGain;
+	uniform float forceGain;
+	uniform float velGain;
+	uniform float mirrorMode; // 0:none,1:x,2:y,3:xy
 	
 	vec3 hash3(vec3 p){
 		p = vec3(dot(p,vec3(127.1,311.7,74.7)), dot(p,vec3(269.5,183.3,246.1)), dot(p,vec3(113.5,271.9,124.6)));
@@ -221,20 +227,20 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 		shapeTarget *= breath;
 		// Screen-centered plane target mapped from UV so particles fill the viewport symmetrically
 		vec2 nd = uv * 2.0 - 1.0; // [-1,1]
-		vec3 planeTarget = vec3(nd.x * boundsX, nd.y * boundsY, 0.0);
+		vec3 planeTarget = vec3(nd.x * boundsX * scaleGain, nd.y * boundsY * scaleGain, 0.0);
 		vec3 target = mix(planeTarget, shapeTarget, 0.6);
 		vec3 towardTarget = (target - pos.xyz);
 		float morph = clamp(0.35 + (audioEnergy*energyMult)*1.0 + (audioBass*bassMult)*1.0, 0.0, 2.0);
-		force += normalize(towardTarget) * morph * 0.9;
+		force += normalize(towardTarget) * morph * 0.9 * forceGain;
 		
 		// Multiple moving centers across the full screen
-		force += normalize(c0 - pos.xyz) * cWts.x;
-		force += normalize(c1 - pos.xyz) * cWts.y;
-		force += normalize(c2 - pos.xyz) * cWts.z;
-		force += normalize(c3 - pos.xyz) * cWts.w;
+		force += normalize(c0 - pos.xyz) * cWts.x * forceGain;
+		force += normalize(c1 - pos.xyz) * cWts.y * forceGain;
+		force += normalize(c2 - pos.xyz) * cWts.z * forceGain;
+		force += normalize(c3 - pos.xyz) * cWts.w * forceGain;
 		
 		// Center spring keeps distribution symmetric
-		force += -pos.xyz * centerSpring;
+		force += -pos.xyz * centerSpring * forceGain;
 		// Confinement: centripetal pull outside soft radius
 		float rad = boundsRadius + audioEnergy*0.6 + audioBass*0.6;
 		float dCenter = max(0.0, length(pos.xyz) - rad);
@@ -242,7 +248,7 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 		
 		// Swirl for flow
 		float w = swirl * (0.25 + (audioEnergy*energyMult)*0.8 + (audioBass*bassMult)*0.6);
-		force += vec3(-pos.z, 0.0, pos.x) * w * 0.05;
+		force += vec3(-pos.z, 0.0, pos.x) * w * 0.05 * forceGain;
 		
 		// Organic drift
 		vec3 n = vec3(
@@ -251,13 +257,21 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 			noise(pos.zxy * noiseScale + time*0.13)
 		);
 		float audioScale = 1.0 + (audioEnergy*energyMult)*1.6 + (audioBass*bassMult)*1.8;
-		force += (n - 0.5) * audioScale;
+		force += (n - 0.5) * audioScale * forceGain;
 		
 		// Velocity update
-		vel.xyz = mix(vel.xyz + force, vel.xyz * damping, 0.0);
+		vel.xyz = mix(vel.xyz + force * velGain, vel.xyz * damping, 0.0);
 		
 		// Apply kick bursts
-		vel.xyz += normalize(force + n - 0.5) * ((audioKick*kickMult)*1.6 + (audioBass*bassMult)*0.8);
+		vel.xyz += normalize(force + n - 0.5) * ((audioKick*kickMult)*1.6 + (audioBass*bassMult)*0.8) * velGain;
+		
+		// Mirror mode position blend
+		if (mirrorMode > 0.5) {
+			vec3 m = pos.xyz;
+			if (mirrorMode < 1.5 || mirrorMode > 2.5) m.x = -m.x; // x for modes 1 or 3
+			if (mirrorMode > 1.5) m.y = -m.y; // y for modes 2 or 3
+			pos.xyz = mix(pos.xyz, m, 0.02 * forceGain);
+		}
 		
 		// Integrate
 		pos.xyz += vel.xyz * 0.016;
@@ -312,73 +326,115 @@ gpu.setVariableDependencies(velocityVariable, [positionVariable, velocityVariabl
 (positionVariable.material.uniforms as any).c2 = { value: new THREE.Vector3() };
 (positionVariable.material.uniforms as any).c3 = { value: new THREE.Vector3() };
 (positionVariable.material.uniforms as any).cWts = { value: new THREE.Vector4(1.0, 0.8, 0.6, 0.5) };
+(positionVariable.material.uniforms as any).scaleGain = { value: 1.0 };
+(positionVariable.material.uniforms as any).forceGain = { value: 1.0 };
+(positionVariable.material.uniforms as any).velGain = { value: 1.0 };
+(positionVariable.material.uniforms as any).mirrorMode = { value: 0.0 };
 
 gpu.init();
 
 // Particle render material
 const particleGeometry = new THREE.BufferGeometry();
-const positions = new Float32Array(PARTICLE_COUNT * 3);
-const uvs = new Float32Array(PARTICLE_COUNT * 2);
-let p = 0, u = 0;
-for (let y = 0; y < PARTICLES_SIDE; y++) {
-	for (let x = 0; x < PARTICLES_SIDE; x++) {
-		positions[p++] = 0;
-		positions[p++] = 0;
-		positions[p++] = 0;
-		uvs[u++] = x / (PARTICLES_SIDE - 1);
-		uvs[u++] = y / (PARTICLES_SIDE - 1);
+let positions = new Float32Array(PARTICLE_COUNT * 3);
+let uvs = new Float32Array(PARTICLE_COUNT * 2);
+function buildGeometry(){
+	positions = new Float32Array(PARTICLE_COUNT * 3);
+	uvs = new Float32Array(PARTICLE_COUNT * 2);
+	let p = 0, u = 0;
+	for (let y = 0; y < PARTICLES_SIDE; y++) {
+		for (let x = 0; x < PARTICLES_SIDE; x++) {
+			positions[p++] = 0; positions[p++] = 0; positions[p++] = 0;
+			uvs[u++] = x / (PARTICLES_SIDE - 1);
+			uvs[u++] = y / (PARTICLES_SIDE - 1);
+		}
 	}
+	particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+	particleGeometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 }
-particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-particleGeometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+buildGeometry();
+
+const baseUniforms = {
+	time: { value: 0 },
+	pointSize: { value: 2.0 },
+	colorA: { value: new THREE.Color('#66ccff') },
+	colorB: { value: new THREE.Color('#ff66cc') },
+	texPosition: { value: null },
+	flip: { value: new THREE.Vector2(1,1) }
+};
+
+const vertexShader = /* glsl */`
+	uniform float time;
+	uniform float pointSize;
+	uniform sampler2D texPosition;
+	uniform vec2 flip;
+	varying float vDepth;
+	varying vec2 vUv2;
+	void main(){
+		vec3 pos = texture2D(texPosition, uv).xyz;
+		pos.x *= flip.x; pos.y *= flip.y;
+		vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+		vDepth = -mvPosition.z;
+		vUv2 = uv;
+		gl_PointSize = pointSize;
+		gl_Position = projectionMatrix * mvPosition;
+	}
+`;
+
+const fragmentShader = /* glsl */`
+	uniform vec3 colorA;
+	uniform vec3 colorB;
+	varying float vDepth;
+	varying vec2 vUv2;
+	void main(){
+		vec2 c = gl_PointCoord - 0.5;
+		float r = dot(c,c);
+		if(r>0.25) discard;
+		float falloff = smoothstep(0.25, 0.0, r);
+		vec3 color = mix(colorA, colorB, vUv2.x);
+		gl_FragColor = vec4(color, falloff*0.85);
+	}
+`;
 
 const particleMaterial = new THREE.ShaderMaterial({
 	transparent: true,
 	depthWrite: false,
 	blending: THREE.AdditiveBlending,
-	uniforms: {
-		time: { value: 0 },
-		pointSize: { value: 2.0 },
-		colorA: { value: new THREE.Color('#66ccff') },
-		colorB: { value: new THREE.Color('#ff66cc') },
-		texPosition: { value: null }
-	},
-	vertexShader: /* glsl */`
-		uniform float time;
-		uniform float pointSize;
-		uniform sampler2D texPosition;
-		varying float vDepth;
-		varying vec2 vUv2;
-		void main(){
-			vec3 pos = texture2D(texPosition, uv).xyz;
-			vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
-			vDepth = -mvPosition.z;
-			vUv2 = uv;
-			gl_PointSize = pointSize;
-			gl_Position = projectionMatrix * mvPosition;
-		}
-	`,
-	fragmentShader: /* glsl */`
-		uniform vec3 colorA;
-		uniform vec3 colorB;
-		varying float vDepth;
-		varying vec2 vUv2;
-		void main(){
-			vec2 c = gl_PointCoord - 0.5;
-			float r = dot(c,c);
-			if(r>0.25) discard;
-			float falloff = smoothstep(0.25, 0.0, r);
-			vec3 color = mix(colorA, colorB, vUv2.x);
-			gl_FragColor = vec4(color, falloff*0.85);
-		}
-	`
+	uniforms: baseUniforms,
+	vertexShader,
+	fragmentShader
 });
 
 const points = new THREE.Points(particleGeometry, particleMaterial);
 scene.add(points);
 
+function makeMirrorMaterial(fx: number, fy: number){
+	const m = particleMaterial.clone();
+	m.uniforms = {
+		time: particleMaterial.uniforms.time,
+		pointSize: particleMaterial.uniforms.pointSize,
+		colorA: particleMaterial.uniforms.colorA,
+		colorB: particleMaterial.uniforms.colorB,
+		texPosition: particleMaterial.uniforms.texPosition,
+		flip: { value: new THREE.Vector2(fx, fy) }
+	};
+	m.vertexShader = vertexShader;
+	m.fragmentShader = fragmentShader;
+	m.needsUpdate = true;
+	return m;
+}
+
+const mirrorXPoints = new THREE.Points(particleGeometry, makeMirrorMaterial(-1, 1));
+const mirrorYPoints = new THREE.Points(particleGeometry, makeMirrorMaterial(1, -1));
+const mirrorXYPoints = new THREE.Points(particleGeometry, makeMirrorMaterial(-1, -1));
+mirrorXPoints.visible = false;
+mirrorYPoints.visible = false;
+mirrorXYPoints.visible = false;
+scene.add(mirrorXPoints);
+scene.add(mirrorYPoints);
+scene.add(mirrorXYPoints);
+
 // Profiles
-let basePointSize = particleMaterial.uniforms.pointSize.value as number;
+let basePointSize = (baseUniforms.pointSize.value as number);
 let baseDamping = (positionVariable.material.uniforms as any).damping.value as number;
 const profiles: VisualProfile[] = createProfiles(100);
 let current = 0;
@@ -386,9 +442,9 @@ applyProfile(profiles[current]);
 
 function applyProfile(pf: VisualProfile){
 	const rad = getViewRadius();
-	particleMaterial.uniforms.colorA.value.set(pf.colorA);
-	particleMaterial.uniforms.colorB.value.set(pf.colorB);
-	particleMaterial.uniforms.pointSize.value = Math.min(1.4, pf.pointSize);
+	(baseUniforms.colorA.value as THREE.Color).set(pf.colorA);
+	(baseUniforms.colorB.value as THREE.Color).set(pf.colorB);
+	baseUniforms.pointSize.value = Math.min(1.4, pf.pointSize);
 	(positionVariable.material.uniforms as any).damping.value = pf.damping;
 	(positionVariable.material.uniforms as any).noiseScale.value = pf.noiseScale;
 	(positionVariable.material.uniforms as any).shapeType.value = pf.shapeType;
@@ -407,7 +463,7 @@ function applyProfile(pf: VisualProfile){
 	hudProfileName.textContent = `Profile ${pf.name}`;
 	basePointSize = Math.min(1.4, pf.pointSize);
 	baseDamping = pf.damping;
-	// Populate dock inputs
+	// Populate dock inputs that exist
 	sizeRange.value = String(pf.pointSize);
 	dampingRange.value = String(pf.damping);
 	noiseRange.value = String(pf.noiseScale);
@@ -435,7 +491,7 @@ let audio: AudioEngine | null = null;
 // Dock interactions
 if (dockToggle) dockToggle.onclick = () => { dock.classList.toggle('open'); };
 if (resetBtn) resetBtn.onclick = () => resetSimulation();
-sizeRange.oninput = () => { const v = parseFloat(sizeRange.value); particleMaterial.uniforms.pointSize.value = v; basePointSize = v; };
+sizeRange.oninput = () => { const v = parseFloat(sizeRange.value); baseUniforms.pointSize.value = v; basePointSize = v; };
 dampingRange.oninput = () => { const v = parseFloat(dampingRange.value); (positionVariable.material.uniforms as any).damping.value = v; baseDamping = v; };
 noiseRange.oninput = () => { (positionVariable.material.uniforms as any).noiseScale.value = parseFloat(noiseRange.value); };
 swirlRange.oninput = () => { (positionVariable.material.uniforms as any).swirl.value = parseFloat(swirlRange.value); };
@@ -444,15 +500,33 @@ shapeTypeSel.oninput = () => { (positionVariable.material.uniforms as any).shape
 shapeAEl.oninput = () => { (positionVariable.material.uniforms as any).shapeA.value = parseFloat(shapeAEl.value) * getViewRadius(); };
 shapeBEl.oninput = () => { (positionVariable.material.uniforms as any).shapeB.value = parseFloat(shapeBEl.value) * getViewRadius(); };
 shapeCEl.oninput = () => { (positionVariable.material.uniforms as any).shapeC.value = parseFloat(shapeCEl.value); };
-colorAEl.oninput = () => { particleMaterial.uniforms.colorA.value.set(colorAEl.value); };
-colorBEl.oninput = () => { particleMaterial.uniforms.colorB.value.set(colorBEl.value); };
+colorAEl.oninput = () => { (baseUniforms.colorA.value as THREE.Color).set(colorAEl.value); };
+colorBEl.oninput = () => { (baseUniforms.colorB.value as THREE.Color).set(colorBEl.value); };
 if (energyMultEl) energyMultEl.oninput = () => { (positionVariable.material.uniforms as any).energyMult.value = parseFloat(energyMultEl.value); };
 if (bassMultEl) bassMultEl.oninput = () => { (positionVariable.material.uniforms as any).bassMult.value = parseFloat(bassMultEl.value); };
 if (kickMultEl) kickMultEl.oninput = () => { (positionVariable.material.uniforms as any).kickMult.value = parseFloat(kickMultEl.value); };
 boundsXRange.oninput = () => { (positionVariable.material.uniforms as any).boundsX.value = parseFloat(boundsXRange.value) * ortho.right; };
 boundsYRange.oninput = () => { (positionVariable.material.uniforms as any).boundsY.value = parseFloat(boundsYRange.value) * ortho.top; };
 centerRange.oninput = () => { (positionVariable.material.uniforms as any).centerAttract.value = parseFloat(centerRange.value); (positionVariable.material.uniforms as any).centerSpring.value = Math.max(0.05, parseFloat(centerRange.value) * 0.2); };
-if (randomBtn) randomBtn.onclick = () => { current = Math.floor(Math.random()*profiles.length); applyProfile(profiles[current]); resetSimulation(); };
+if (mirrorModeEl) mirrorModeEl.oninput = () => {
+	const val = mirrorModeEl.value;
+	mirrorXPoints.visible = (val === 'x' || val === 'xy');
+	mirrorYPoints.visible = (val === 'y' || val === 'xy');
+	mirrorXYPoints.visible = (val === 'xy');
+};
+if (particleSideEl) particleSideEl.oninput = () => {
+	const side = Math.max(100, Math.min(2000, Math.floor(parseFloat(particleSideEl.value))));
+	PARTICLES_SIDE = side;
+	PARTICLE_COUNT = PARTICLES_SIDE * PARTICLES_SIDE;
+	// Rebuild GPU textures and geometry
+	(gpu as any).sizeX = PARTICLES_SIDE; (gpu as any).sizeY = PARTICLES_SIDE;
+	dtPosition = gpu.createTexture();
+	dtVelocity = gpu.createTexture();
+	seedTextures(getViewRadius());
+	gpu.init();
+	buildGeometry();
+	resetSimulation();
+};
 
 // Update bounds on resize
 function resize(){
@@ -504,14 +578,14 @@ function animate(){
 	// Move multiple centers across full viewport (lissajous-like paths)
 	const rad = getViewRadius()*0.95;
 	const hw = ortho.right, hh = ortho.top;
-	const c0 = new THREE.Vector3(Math.sin(t*0.21)*hw, Math.cos(t*0.27)*hh, 0);
-	const c1 = new THREE.Vector3(Math.sin(t*0.34+1.1)*hw, Math.sin(t*0.19+0.6)*hh, 0);
-	const c2 = new THREE.Vector3(Math.cos(t*0.15+2.0)*hw, Math.sin(t*0.41+1.7)*hh, 0);
-	const c3 = new THREE.Vector3(Math.sin(t*0.52+0.4)*hw, Math.cos(t*0.36+0.9)*hh, 0);
-	(positionVariable.material.uniforms as any).c0.value.copy(c0);
-	(positionVariable.material.uniforms as any).c1.value.copy(c1);
-	(positionVariable.material.uniforms as any).c2.value.copy(c2);
-	(positionVariable.material.uniforms as any).c3.value.copy(c3);
+	const c0v = new THREE.Vector3(Math.sin(t*0.21)*hw, Math.cos(t*0.27)*hh, 0);
+	const c1v = new THREE.Vector3(Math.sin(t*0.34+1.1)*hw, Math.sin(t*0.19+0.6)*hh, 0);
+	const c2v = new THREE.Vector3(Math.cos(t*0.15+2.0)*hw, Math.sin(t*0.41+1.7)*hh, 0);
+	const c3v = new THREE.Vector3(Math.sin(t*0.52+0.4)*hw, Math.cos(t*0.36+0.9)*hh, 0);
+	(positionVariable.material.uniforms as any).c0.value.copy(c0v);
+	(positionVariable.material.uniforms as any).c1.value.copy(c1v);
+	(positionVariable.material.uniforms as any).c2.value.copy(c2v);
+	(positionVariable.material.uniforms as any).c3.value.copy(c3v);
 	
 	const now = performance.now();
 	const dt = now - lastNow; lastNow = now;
@@ -533,12 +607,12 @@ function animate(){
 	(positionVariable.material.uniforms as any).audioKick.value = kick;
 	(positionVariable.material.uniforms as any).audioBass.value = bass;
 	// Pump point size and reduce damping slightly with energy/bass
-	particleMaterial.uniforms.pointSize.value = Math.min(1.8, basePointSize * (1.0 + energy*0.5 + kick*0.4));
+	baseUniforms.pointSize.value = Math.min(1.8, basePointSize * (1.0 + energy*0.5 + kick*0.4));
 	(positionVariable.material.uniforms as any).damping.value = Math.max(0.85, baseDamping - (energy*0.06 + bass*0.08));
 	
 	gpu.compute();
-	particleMaterial.uniforms.time.value = t;
-	particleMaterial.uniforms.texPosition.value = gpu.getCurrentRenderTarget(positionVariable).texture;
+	baseUniforms.time.value = t;
+	baseUniforms.texPosition.value = gpu.getCurrentRenderTarget(positionVariable).texture;
 	renderer.render(scene, ortho);
 }
 animate();
@@ -549,8 +623,8 @@ animate();
 		const u = (positionVariable.material.uniforms as any);
 		if (u[key] && typeof u[key].value === 'number') u[key].value = value;
 	},
-	colorA: (hex: string) => particleMaterial.uniforms.colorA.value.set(hex),
-	colorB: (hex: string) => particleMaterial.uniforms.colorB.value.set(hex),
+	colorA: (hex: string) => (baseUniforms.colorA.value as THREE.Color).set(hex),
+	colorB: (hex: string) => (baseUniforms.colorB.value as THREE.Color).set(hex),
 	reset: () => resetSimulation(),
 	random: () => { current = Math.floor(Math.random()*profiles.length); applyProfile(profiles[current]); resetSimulation(); }
 }; 
