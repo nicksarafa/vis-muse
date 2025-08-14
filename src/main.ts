@@ -10,6 +10,20 @@ const sysBtn = document.getElementById('sysBtn') as HTMLButtonElement;
 const fileBtn = document.getElementById('fileBtn') as HTMLButtonElement;
 const fileInput = document.getElementById('fileInput') as HTMLInputElement;
 const statsEl = document.getElementById('stats') as HTMLDivElement;
+const dock = document.getElementById('dock') as HTMLDivElement;
+const dockToggle = document.getElementById('dockToggle') as HTMLButtonElement;
+const sizeRange = document.getElementById('sizeRange') as HTMLInputElement;
+const dampingRange = document.getElementById('dampingRange') as HTMLInputElement;
+const noiseRange = document.getElementById('noiseRange') as HTMLInputElement;
+const swirlRange = document.getElementById('swirlRange') as HTMLInputElement;
+const restRange = document.getElementById('restRange') as HTMLInputElement;
+const shapeTypeSel = document.getElementById('shapeType') as HTMLSelectElement;
+const shapeAEl = document.getElementById('shapeA') as HTMLInputElement;
+const shapeBEl = document.getElementById('shapeB') as HTMLInputElement;
+const shapeCEl = document.getElementById('shapeC') as HTMLInputElement;
+const colorAEl = document.getElementById('colorA') as HTMLInputElement;
+const colorBEl = document.getElementById('colorB') as HTMLInputElement;
+const resetBtn = document.getElementById('resetBtn') as HTMLButtonElement;
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -88,6 +102,10 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 	uniform float boundsRadius;
 	uniform float centerAttract;
 	uniform float swirl;
+	uniform float boundsX;
+	uniform float boundsY;
+	uniform float boundsZ;
+	uniform float restitution;
 	
 	vec3 hash3(vec3 p){
 		p = vec3(dot(p,vec3(127.1,311.7,74.7)), dot(p,vec3(269.5,183.3,246.1)), dot(p,vec3(113.5,271.9,124.6)));
@@ -216,6 +234,14 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 		// Integrate
 		pos.xyz += vel.xyz * 0.016;
 		
+		// Bounce at bounds
+		if (pos.x > boundsX) { pos.x = boundsX; vel.x = -abs(vel.x) * restitution; }
+		else if (pos.x < -boundsX) { pos.x = -boundsX; vel.x = abs(vel.x) * restitution; }
+		if (pos.y > boundsY) { pos.y = boundsY; vel.y = -abs(vel.y) * restitution; }
+		else if (pos.y < -boundsY) { pos.y = -boundsY; vel.y = abs(vel.y) * restitution; }
+		if (pos.z > boundsZ) { pos.z = boundsZ; vel.z = -abs(vel.z) * restitution; }
+		else if (pos.z < -boundsZ) { pos.z = -boundsZ; vel.z = abs(vel.z) * restitution; }
+		
 		// Safety clamp
 		pos.xyz = clamp(pos.xyz, vec3(-8.0), vec3(8.0));
 		
@@ -248,6 +274,10 @@ gpu.setVariableDependencies(velocityVariable, [positionVariable, velocityVariabl
 (positionVariable.material.uniforms as any).boundsRadius = { value: 0.95 };
 (positionVariable.material.uniforms as any).centerAttract = { value: 1.0 };
 (positionVariable.material.uniforms as any).swirl = { value: 0.5 };
+(positionVariable.material.uniforms as any).boundsX = { value: 0.95 };
+(positionVariable.material.uniforms as any).boundsY = { value: 0.95 };
+(positionVariable.material.uniforms as any).boundsZ = { value: 0.95 };
+(positionVariable.material.uniforms as any).restitution = { value: 0.8 };
 
 gpu.init();
 
@@ -334,9 +364,25 @@ function applyProfile(pf: VisualProfile){
 	(positionVariable.material.uniforms as any).boundsRadius.value = pf.boundsRadius * rad;
 	(positionVariable.material.uniforms as any).centerAttract.value = pf.centerAttract;
 	(positionVariable.material.uniforms as any).swirl.value = pf.swirl;
+	(positionVariable.material.uniforms as any).boundsX.value = pf.boundsX * rad;
+	(positionVariable.material.uniforms as any).boundsY.value = pf.boundsY * rad;
+	(positionVariable.material.uniforms as any).boundsZ.value = pf.boundsZ * rad;
+	(positionVariable.material.uniforms as any).restitution.value = pf.restitution;
 	hudProfileName.textContent = `Profile ${pf.name}`;
 	basePointSize = pf.pointSize;
 	baseDamping = pf.damping;
+	// Populate dock inputs
+	sizeRange.value = String(pf.pointSize);
+	dampingRange.value = String(pf.damping);
+	noiseRange.value = String(pf.noiseScale);
+	swirlRange.value = String(pf.swirl);
+	restRange.value = String(pf.restitution);
+	shapeTypeSel.value = String(pf.shapeType);
+	shapeAEl.value = String(pf.shapeA);
+	shapeBEl.value = String(pf.shapeB);
+	shapeCEl.value = String(pf.shapeC);
+	colorAEl.value = new THREE.Color(pf.colorA).getHexString().padStart(6,'0').startsWith('#')? pf.colorA : `#${new THREE.Color(pf.colorA).getHexString()}`;
+	colorBEl.value = new THREE.Color(pf.colorB).getHexString().padStart(6,'0').startsWith('#')? pf.colorB : `#${new THREE.Color(pf.colorB).getHexString()}`;
 }
 
 function resetSimulation(){
@@ -350,10 +396,31 @@ let audio: AudioEngine | null = null;
 	audio = await createAudioEngine();
 })();
 
-// Controls
+// Dock interactions
+if (dockToggle) dockToggle.onclick = () => { dock.classList.toggle('open'); };
+if (resetBtn) resetBtn.onclick = () => resetSimulation();
+sizeRange.oninput = () => { const v = parseFloat(sizeRange.value); particleMaterial.uniforms.pointSize.value = v; basePointSize = v; };
+dampingRange.oninput = () => { const v = parseFloat(dampingRange.value); (positionVariable.material.uniforms as any).damping.value = v; baseDamping = v; };
+noiseRange.oninput = () => { (positionVariable.material.uniforms as any).noiseScale.value = parseFloat(noiseRange.value); };
+swirlRange.oninput = () => { (positionVariable.material.uniforms as any).swirl.value = parseFloat(swirlRange.value); };
+restRange.oninput = () => { (positionVariable.material.uniforms as any).restitution.value = parseFloat(restRange.value); };
+shapeTypeSel.oninput = () => { (positionVariable.material.uniforms as any).shapeType.value = parseFloat(shapeTypeSel.value); };
+shapeAEl.oninput = () => { (positionVariable.material.uniforms as any).shapeA.value = parseFloat(shapeAEl.value) * getViewRadius(); };
+shapeBEl.oninput = () => { (positionVariable.material.uniforms as any).shapeB.value = parseFloat(shapeBEl.value) * getViewRadius(); };
+shapeCEl.oninput = () => { (positionVariable.material.uniforms as any).shapeC.value = parseFloat(shapeCEl.value); };
+colorAEl.oninput = () => { particleMaterial.uniforms.colorA.value.set(colorAEl.value); };
+colorBEl.oninput = () => { particleMaterial.uniforms.colorB.value.set(colorBEl.value); };
+
+// Update bounds on resize
 function resize(){
 	renderer.setSize(window.innerWidth, window.innerHeight);
 	setupCamera();
+	const rad = getViewRadius();
+	(positionVariable.material.uniforms as any).boundsX.value = profiles[current].boundsX * rad;
+	(positionVariable.material.uniforms as any).boundsY.value = profiles[current].boundsY * rad;
+	(positionVariable.material.uniforms as any).boundsZ.value = profiles[current].boundsZ * rad;
+	(positionVariable.material.uniforms as any).shapeA.value = profiles[current].shapeA * rad;
+	(positionVariable.material.uniforms as any).shapeB.value = profiles[current].shapeB * rad;
 }
 window.addEventListener('resize', resize);
 

@@ -12,6 +12,10 @@ export type VisualProfile = {
 	boundsRadius: number;
 	centerAttract: number;
 	swirl: number;
+	boundsX: number;
+	boundsY: number;
+	boundsZ: number;
+	restitution: number;
 }
 
 const palettes: [string, string][]= [
@@ -53,7 +57,7 @@ function pick<T>(arr: T[]): T { return arr[Math.floor(Math.random()*arr.length)]
 export function randomizeProfile(i: number): VisualProfile {
 	const [a,b] = pick(palettes);
 	const shapeType = Math.floor(rand(0, 6));
-	const boundsRadius = rand(1.2, 1.8);
+	const boundsRadius = rand(0.8, 1.0);
 	return {
 		name: `${i+1}`,
 		colorA: a,
@@ -62,12 +66,16 @@ export function randomizeProfile(i: number): VisualProfile {
 		damping: rand(0.90, 0.99),
 		noiseScale: rand(0.4, 2.0),
 		shapeType,
-		shapeA: rand(0.5, 1.4),
+		shapeA: rand(0.7, 1.4),
 		shapeB: rand(0.2, 0.9),
 		shapeC: rand(2.0, 7.0),
 		boundsRadius,
 		centerAttract: rand(0.6, 2.0),
-		swirl: rand(0.0, 2.0),
+		swirl: rand(0.2, 1.6),
+		boundsX: rand(0.85, 0.98),
+		boundsY: rand(0.85, 0.98),
+		boundsZ: rand(0.4, 0.8),
+		restitution: rand(0.7, 0.95),
 	};
 }
 
