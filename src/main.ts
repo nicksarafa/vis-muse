@@ -33,6 +33,12 @@ const boundsYRange = document.getElementById('boundsYRange') as HTMLInputElement
 const centerRange = document.getElementById('centerRange') as HTMLInputElement;
 const mirrorModeEl = document.getElementById('mirrorMode') as HTMLSelectElement | null;
 const particleSideEl = document.getElementById('particleSide') as HTMLInputElement | null;
+const c0SpeedEl = document.getElementById('c0Speed') as HTMLInputElement | null;
+const c1SpeedEl = document.getElementById('c1Speed') as HTMLInputElement | null;
+const c2SpeedEl = document.getElementById('c2Speed') as HTMLInputElement | null;
+const c3SpeedEl = document.getElementById('c3Speed') as HTMLInputElement | null;
+const cPhaseEl = document.getElementById('cPhase') as HTMLInputElement | null;
+let c0Speed = 0.21, c1Speed = 0.34, c2Speed = 0.15, c3Speed = 0.52; let cPhase = 0.0;
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -514,6 +520,21 @@ if (mirrorModeEl) mirrorModeEl.oninput = () => {
 	mirrorYPoints.visible = (val === 'y' || val === 'xy');
 	mirrorXYPoints.visible = (val === 'xy');
 };
+if (randomBtn) randomBtn.onclick = () => {
+  // pick a random mirror mode
+  const modes = ['none', 'x', 'y', 'xy'];
+  const newMode = modes[Math.floor(Math.random() * modes.length)];
+
+  // set <select id="mirrorMode"> and fire change
+  const mirrorModeEl = document.getElementById('mirrorMode') as HTMLSelectElement | null;
+  if (mirrorModeEl) {
+    mirrorModeEl.value = newMode;
+    mirrorModeEl.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  // reseed so you see the change clearly (optional)
+  resetSimulation();
+};
 if (particleSideEl) particleSideEl.oninput = () => {
 	const side = Math.max(100, Math.min(2000, Math.floor(parseFloat(particleSideEl.value))));
 	PARTICLES_SIDE = side;
@@ -526,6 +547,60 @@ if (particleSideEl) particleSideEl.oninput = () => {
 	gpu.init();
 	buildGeometry();
 	resetSimulation();
+};
+if (c0SpeedEl) c0SpeedEl.oninput = () => { c0Speed = 0.01 + 1.99 * parseFloat(c0SpeedEl.value)/2.0; };
+if (c1SpeedEl) c1SpeedEl.oninput = () => { c1Speed = 0.01 + 1.99 * parseFloat(c1SpeedEl.value)/2.0; };
+if (c2SpeedEl) c2SpeedEl.oninput = () => { c2Speed = 0.01 + 1.99 * parseFloat(c2SpeedEl.value)/2.0; };
+if (c3SpeedEl) c3SpeedEl.oninput = () => { c3Speed = 0.01 + 1.99 * parseFloat(c3SpeedEl.value)/2.0; };
+if (cPhaseEl) cPhaseEl.oninput = () => { cPhase = parseFloat(cPhaseEl.value); };
+
+function randomizeAllDockControls() {
+  const controls = document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('#dock input, #dock select');
+
+  const pickInStep = (min: number, max: number, step: number) => {
+    const raw = min + Math.random() * (max - min);
+    const snapped = Math.round(raw / step) * step;
+    return Math.min(max, Math.max(min, snapped));
+  };
+
+  controls.forEach((el) => {
+    if (el instanceof HTMLSelectElement) {
+      if (el.options.length > 0) {
+        el.selectedIndex = Math.floor(Math.random() * el.options.length);
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return;
+    }
+
+    if (el instanceof HTMLInputElement) {
+      if (el.type === 'range') {
+        const min = parseFloat(el.min || '0');
+        const max = parseFloat(el.max || '1');
+        const step = parseFloat(el.step || '0.01');
+        el.value = String(pickInStep(min, max, isFinite(step) && step > 0 ? step : 0.01));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
+      if (el.type === 'color') {
+        el.value = '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
+      if (el.type === 'checkbox') {
+        el.checked = Math.random() < 0.5;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return;
+      }
+    }
+  });
+}
+
+// Random button
+if (randomBtn) randomBtn.onclick = () => {
+  randomizeAllDockControls();
+  resetSimulation();
 };
 
 // Update bounds on resize
@@ -578,10 +653,10 @@ function animate(){
 	// Move multiple centers across full viewport (lissajous-like paths)
 	const rad = getViewRadius()*0.95;
 	const hw = ortho.right, hh = ortho.top;
-	const c0v = new THREE.Vector3(Math.sin(t*0.21)*hw, Math.cos(t*0.27)*hh, 0);
-	const c1v = new THREE.Vector3(Math.sin(t*0.34+1.1)*hw, Math.sin(t*0.19+0.6)*hh, 0);
-	const c2v = new THREE.Vector3(Math.cos(t*0.15+2.0)*hw, Math.sin(t*0.41+1.7)*hh, 0);
-	const c3v = new THREE.Vector3(Math.sin(t*0.52+0.4)*hw, Math.cos(t*0.36+0.9)*hh, 0);
+	const c0v = new THREE.Vector3(Math.sin(t*c0Speed + cPhase)*hw, Math.cos(t*(c0Speed+0.06) + cPhase)*hh, 0);
+	const c1v = new THREE.Vector3(Math.sin(t*c1Speed+1.1 + cPhase)*hw, Math.sin(t*(c1Speed-0.15)+0.6 + cPhase)*hh, 0);
+	const c2v = new THREE.Vector3(Math.cos(t*c2Speed+2.0 + cPhase)*hw, Math.sin(t*(c2Speed+0.26)+1.7 + cPhase)*hh, 0);
+	const c3v = new THREE.Vector3(Math.sin(t*c3Speed+0.4 + cPhase)*hw, Math.cos(t*(c3Speed-0.16)+0.9 + cPhase)*hh, 0);
 	(positionVariable.material.uniforms as any).c0.value.copy(c0v);
 	(positionVariable.material.uniforms as any).c1.value.copy(c1v);
 	(positionVariable.material.uniforms as any).c2.value.copy(c2v);
