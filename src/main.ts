@@ -9,6 +9,7 @@ const micBtn = document.getElementById('micBtn') as HTMLButtonElement;
 const sysBtn = document.getElementById('sysBtn') as HTMLButtonElement;
 const fileBtn = document.getElementById('fileBtn') as HTMLButtonElement;
 const fileInput = document.getElementById('fileInput') as HTMLInputElement;
+const statsEl = document.getElementById('stats') as HTMLDivElement;
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -64,6 +65,7 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 	uniform float noiseScale;
 	uniform float audioKick;
 	uniform float audioEnergy;
+	uniform float audioBass;
 	uniform sampler2D texturePosition;
 	uniform sampler2D textureVelocity;
 	uniform vec2 resolution;
@@ -110,13 +112,14 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 			noise(pos.yzx * noiseScale + time*0.17),
 			noise(pos.zxy * noiseScale + time*0.13)
 		);
-		force += (n - 0.5) * (0.6 + audioEnergy*0.8);
+		float audioScale = 1.2 + audioEnergy*2.2 + audioBass*2.5;
+		force += (n - 0.5) * audioScale;
 		
 		// Velocity update
 		vel.xyz = mix(vel.xyz + force, vel.xyz * damping, 0.0);
 		
 		// Apply kick bursts
-		vel.xyz += normalize(force + n - 0.5) * (audioKick*0.5);
+		vel.xyz += normalize(force + n - 0.5) * (audioKick*1.8 + audioBass*0.9);
 		
 		// Integrate
 		pos.xyz += vel.xyz * 0.016;
@@ -146,6 +149,7 @@ gpu.setVariableDependencies(velocityVariable, [positionVariable, velocityVariabl
 (positionVariable.material.uniforms as any).noiseScale = { value: 0.8 };
 (positionVariable.material.uniforms as any).audioKick = { value: 0.0 };
 (positionVariable.material.uniforms as any).audioEnergy = { value: 0.0 };
+(positionVariable.material.uniforms as any).audioBass = { value: 0.0 };
 
 gpu.init();
 
@@ -212,6 +216,8 @@ const points = new THREE.Points(particleGeometry, particleMaterial);
 scene.add(points);
 
 // Profiles
+let basePointSize = particleMaterial.uniforms.pointSize.value as number;
+let baseDamping = (positionVariable.material.uniforms as any).damping.value as number;
 const profiles: VisualProfile[] = createProfiles(100);
 let current = 0;
 applyProfile(profiles[current]);
@@ -223,6 +229,8 @@ function applyProfile(pf: VisualProfile){
 	(positionVariable.material.uniforms as any).damping.value = pf.damping;
 	(positionVariable.material.uniforms as any).noiseScale.value = pf.noiseScale;
 	hudProfileName.textContent = `Profile ${pf.name}`;
+	basePointSize = pf.pointSize;
+	baseDamping = pf.damping;
 }
 
 // Audio Engine
@@ -274,6 +282,11 @@ fileInput.addEventListener('change', async () => {
 	await audio.useFile(fileInput.files[0]);
 });
 
+// FPS / stats
+let fps = 0;
+let lastNow = performance.now();
+let lastStats = 0;
+
 // Animate
 function animate(){
 	requestAnimationFrame(animate);
@@ -281,14 +294,28 @@ function animate(){
 	(positionVariable.material.uniforms as any).time.value = t;
 	(positionVariable.material.uniforms as any).interactionStrength.value = pointerDown ? 6.0 : 2.6;
 	
-	let energy = 0, kick = 0;
+	const now = performance.now();
+	const dt = now - lastNow; lastNow = now;
+	const inst = dt > 0 ? 1000 / dt : 60;
+	fps = fps * 0.9 + inst * 0.1;
+	if (now - lastStats > 250) {
+		if (statsEl) statsEl.textContent = `FPS: ${Math.round(fps)} • Particles: ${PARTICLE_COUNT.toLocaleString()}`;
+		lastStats = now;
+	}
+	
+	let energy = 0, kick = 0, bass = 0;
 	if (audio) {
 		const a = audio.getAnalysis();
 		energy = a.energy;
 		kick = a.kick;
+		bass = a.bass;
 	}
 	(positionVariable.material.uniforms as any).audioEnergy.value = energy;
 	(positionVariable.material.uniforms as any).audioKick.value = kick;
+	(positionVariable.material.uniforms as any).audioBass.value = bass;
+	// Pump point size and reduce damping slightly with energy/bass
+	particleMaterial.uniforms.pointSize.value = basePointSize * (1.0 + energy*0.8 + kick*0.6);
+	(positionVariable.material.uniforms as any).damping.value = Math.max(0.85, baseDamping - (energy*0.06 + bass*0.08));
 	
 	gpu.compute();
 	particleMaterial.uniforms.time.value = t;
