@@ -13,17 +13,19 @@ export type AudioEngine = {
 }
 
 export async function createAudioEngine(): Promise<AudioEngine> {
-	const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+	const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
 	const ctx = new AudioCtx();
 	const analyser = ctx.createAnalyser();
 	analyser.fftSize = 2048;
+	analyser.smoothingTimeConstant = 0.85;
 	const freq = new Uint8Array(analyser.frequencyBinCount);
 	const time = new Uint8Array(analyser.fftSize);
-	const gain = ctx.createGain();
-	gain.gain.value = 1;
-	analyser.connect(gain).connect(ctx.destination);
+
+	// Do NOT route to destination (no audio output)
+	// analyser.connect(ctx.destination);
 
 	let currentSrc: MediaStreamAudioSourceNode | MediaElementAudioSourceNode | null = null;
+	let currentStream: MediaStream | null = null;
 	let mediaEl: HTMLAudioElement | null = null;
 
 	function cleanupSource() {
@@ -31,8 +33,12 @@ export async function createAudioEngine(): Promise<AudioEngine> {
 			try { currentSrc.disconnect(); } catch {}
 			currentSrc = null;
 		}
+		if (currentStream) {
+			try { currentStream.getTracks().forEach(t => t.stop()); } catch {}
+			currentStream = null;
+		}
 		if (mediaEl) {
-			mediaEl.pause();
+			try { mediaEl.pause(); } catch {}
 			mediaEl.srcObject = null;
 			mediaEl.src = '';
 			mediaEl.remove();
@@ -47,13 +53,20 @@ export async function createAudioEngine(): Promise<AudioEngine> {
 	async function useMic() {
 		await ensureRunning();
 		cleanupSource();
-		const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+		const stream = await navigator.mediaDevices.getUserMedia({
+			audio: {
+				echoCancellation: true,
+				noiseSuppression: true,
+				autoGainControl: true,
+				channelCount: 1
+			}
+		});
 		const src = ctx.createMediaStreamSource(stream);
 		src.connect(analyser);
 		currentSrc = src;
+		currentStream = stream;
 	}
 
-	// Note: true system audio capture requires a virtual device or Chrome's tab capture; we attempt tab capture fallback.
 	async function useSystemAudio() {
 		await ensureRunning();
 		cleanupSource();
@@ -61,7 +74,7 @@ export async function createAudioEngine(): Promise<AudioEngine> {
 			try {
 				const stream = await (navigator.mediaDevices as any).getDisplayMedia({
 					video: true,
-					audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+					audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
 				});
 				const audioTracks = stream.getAudioTracks();
 				if (audioTracks.length === 0) throw new Error('No system audio track');
@@ -69,6 +82,7 @@ export async function createAudioEngine(): Promise<AudioEngine> {
 				const src = ctx.createMediaStreamSource(audioStream);
 				src.connect(analyser);
 				currentSrc = src;
+				currentStream = audioStream;
 				return;
 			} catch (e) {
 				console.warn('System audio capture failed, falling back to file/mic', e);
@@ -84,11 +98,14 @@ export async function createAudioEngine(): Promise<AudioEngine> {
 		mediaEl.crossOrigin = 'anonymous';
 		mediaEl.controls = false;
 		mediaEl.loop = true;
+		mediaEl.muted = true;
+		mediaEl.volume = 0.0;
 		mediaEl.src = URL.createObjectURL(file);
 		await mediaEl.play();
 		const src = ctx.createMediaElementSource(mediaEl);
 		src.connect(analyser);
 		currentSrc = src;
+		currentStream = null;
 	}
 
 	// Analysis
@@ -105,7 +122,6 @@ export async function createAudioEngine(): Promise<AudioEngine> {
 		let bassSum = 0;
 		for (let i = 0; i < bassBins; i++) bassSum += freq[i];
 		const bass = bassSum / (bassBins * 255);
-		// Kick from bass energy rise and global energy delta
 		const deltaBass = Math.max(0, bass - lastBass);
 		const deltaEnergy = Math.max(0, energy - lastEnergy);
 		kickValue = Math.max(kickValue * 0.88, deltaBass * 5.0 + deltaEnergy * 1.5);
@@ -114,9 +130,7 @@ export async function createAudioEngine(): Promise<AudioEngine> {
 		return { energy, bass, kick: kickValue };
 	}
 
-	function toggleMute(){
-		gain.gain.value = gain.gain.value > 0 ? 0 : 1;
-	}
+	function toggleMute(){ /* no-op, nothing is routed */ }
 
 	return { useMic, useSystemAudio, useFile, getAnalysis, toggleMute };
 } 
