@@ -26,6 +26,16 @@
             <label>Bounce (restitution) <input id="restRange" type="range" min="0.2" max="1.0" step="0.02"></label>
           </div>
           <div class="group">
+            <label>Bounds X <input id="boundsXRange" type="range" min="0.5" max="1.0" step="0.01"></label>
+            <label>Bounds Y <input id="boundsYRange" type="range" min="0.5" max="1.0" step="0.01"></label>
+            <label>Center Attract <input id="centerRange" type="range" min="0.2" max="3.0" step="0.05"></label>
+          </div>
+          <div class="group">
+            <label>Energy Mult <input id="energyMult" type="range" min="0.0" max="3.0" step="0.05"></label>
+            <label>Bass Mult <input id="bassMult" type="range" min="0.0" max="3.0" step="0.05"></label>
+            <label>Kick Mult <input id="kickMult" type="range" min="0.0" max="3.0" step="0.05"></label>
+          </div>
+          <div class="group">
             <label>Shape
               <select id="shapeType">
                 <option value="0">Sphere</option>
@@ -46,6 +56,7 @@
           </div>
           <div class="group row">
             <button id="resetBtn">Reset</button>
+            <button id="randomBtn">Random</button>
           </div>
         </div>
       </div>

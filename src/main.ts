@@ -24,6 +24,13 @@ const shapeCEl = document.getElementById('shapeC') as HTMLInputElement;
 const colorAEl = document.getElementById('colorA') as HTMLInputElement;
 const colorBEl = document.getElementById('colorB') as HTMLInputElement;
 const resetBtn = document.getElementById('resetBtn') as HTMLButtonElement;
+const randomBtn = document.getElementById('randomBtn') as HTMLButtonElement;
+const energyMultEl = document.getElementById('energyMult') as HTMLInputElement;
+const bassMultEl = document.getElementById('bassMult') as HTMLInputElement;
+const kickMultEl = document.getElementById('kickMult') as HTMLInputElement;
+const boundsXRange = document.getElementById('boundsXRange') as HTMLInputElement;
+const boundsYRange = document.getElementById('boundsYRange') as HTMLInputElement;
+const centerRange = document.getElementById('centerRange') as HTMLInputElement;
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -91,6 +98,9 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 	uniform float audioKick;
 	uniform float audioEnergy;
 	uniform float audioBass;
+	uniform float energyMult;
+	uniform float bassMult;
+	uniform float kickMult;
 	uniform sampler2D texturePosition;
 	uniform sampler2D textureVelocity;
 	uniform vec2 resolution;
@@ -201,10 +211,10 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 		vec2 jitter = (hash2(uv*4375.85)*2.0-1.0) / resolution * 3.0;
 		vec2 q = clamp(uv + jitter, 0.0, 1.0);
 		vec3 target = getTargetUV(q);
-		float breath = 1.0 + audioEnergy*0.4 + audioBass*0.3 + sin(time*0.5)*0.05;
+		float breath = 1.0 + (audioEnergy*energyMult)*0.4 + (audioBass*bassMult)*0.3 + sin(time*0.5)*0.05;
 		target *= breath;
 		vec3 towardTarget = (target - pos.xyz);
-		float morph = clamp(0.35 + audioEnergy*1.0 + audioBass*1.0, 0.0, 2.0);
+		float morph = clamp(0.35 + (audioEnergy*energyMult)*1.0 + (audioBass*bassMult)*1.0, 0.0, 2.0);
 		force += normalize(towardTarget) * morph * 0.9;
 		
 		// Confinement: centripetal pull to keep within boundsRadius
@@ -213,7 +223,7 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 		force += -normalize(pos.xyz) * dCenter * centerAttract;
 		
 		// Swirl for flow
-		float w = swirl * (0.25 + audioEnergy*0.8 + audioBass*0.6);
+		float w = swirl * (0.25 + (audioEnergy*energyMult)*0.8 + (audioBass*bassMult)*0.6);
 		force += vec3(-pos.z, 0.0, pos.x) * w * 0.05;
 		
 		// Organic drift
@@ -222,14 +232,14 @@ const positionVariable = gpu.addVariable('texturePosition', /* glsl */`
 			noise(pos.yzx * noiseScale + time*0.17),
 			noise(pos.zxy * noiseScale + time*0.13)
 		);
-		float audioScale = 1.0 + audioEnergy*1.6 + audioBass*1.8;
+		float audioScale = 1.0 + (audioEnergy*energyMult)*1.6 + (audioBass*bassMult)*1.8;
 		force += (n - 0.5) * audioScale;
 		
 		// Velocity update
 		vel.xyz = mix(vel.xyz + force, vel.xyz * damping, 0.0);
 		
 		// Apply kick bursts
-		vel.xyz += normalize(force + n - 0.5) * (audioKick*1.6 + audioBass*0.8);
+		vel.xyz += normalize(force + n - 0.5) * ((audioKick*kickMult)*1.6 + (audioBass*bassMult)*0.8);
 		
 		// Integrate
 		pos.xyz += vel.xyz * 0.016;
@@ -267,6 +277,9 @@ gpu.setVariableDependencies(velocityVariable, [positionVariable, velocityVariabl
 (positionVariable.material.uniforms as any).audioKick = { value: 0.0 };
 (positionVariable.material.uniforms as any).audioEnergy = { value: 0.0 };
 (positionVariable.material.uniforms as any).audioBass = { value: 0.0 };
+(positionVariable.material.uniforms as any).energyMult = { value: 1.0 };
+(positionVariable.material.uniforms as any).bassMult = { value: 1.0 };
+(positionVariable.material.uniforms as any).kickMult = { value: 1.0 };
 (positionVariable.material.uniforms as any).shapeType = { value: 0.0 };
 (positionVariable.material.uniforms as any).shapeA = { value: 0.9 };
 (positionVariable.material.uniforms as any).shapeB = { value: 0.5 };
@@ -410,6 +423,13 @@ shapeBEl.oninput = () => { (positionVariable.material.uniforms as any).shapeB.va
 shapeCEl.oninput = () => { (positionVariable.material.uniforms as any).shapeC.value = parseFloat(shapeCEl.value); };
 colorAEl.oninput = () => { particleMaterial.uniforms.colorA.value.set(colorAEl.value); };
 colorBEl.oninput = () => { particleMaterial.uniforms.colorB.value.set(colorBEl.value); };
+energyMultEl.oninput = () => { (positionVariable.material.uniforms as any).energyMult.value = parseFloat(energyMultEl.value); };
+bassMultEl.oninput = () => { (positionVariable.material.uniforms as any).bassMult.value = parseFloat(bassMultEl.value); };
+kickMultEl.oninput = () => { (positionVariable.material.uniforms as any).kickMult.value = parseFloat(kickMultEl.value); };
+boundsXRange.oninput = () => { (positionVariable.material.uniforms as any).boundsX.value = parseFloat(boundsXRange.value) * getViewRadius(); };
+boundsYRange.oninput = () => { (positionVariable.material.uniforms as any).boundsY.value = parseFloat(boundsYRange.value) * getViewRadius(); };
+centerRange.oninput = () => { (positionVariable.material.uniforms as any).centerAttract.value = parseFloat(centerRange.value); };
+if (randomBtn) randomBtn.onclick = () => { current = Math.floor(Math.random()*profiles.length); applyProfile(profiles[current]); resetSimulation(); };
 
 // Update bounds on resize
 function resize(){
@@ -487,3 +507,15 @@ function animate(){
 	renderer.render(scene, ortho);
 }
 animate(); 
+
+// Expose console API
+(window as any).vis = {
+	set: (key: string, value: number) => {
+		const u = (positionVariable.material.uniforms as any);
+		if (u[key] && typeof u[key].value === 'number') u[key].value = value;
+	},
+	colorA: (hex: string) => particleMaterial.uniforms.colorA.value.set(hex),
+	colorB: (hex: string) => particleMaterial.uniforms.colorB.value.set(hex),
+	reset: () => resetSimulation(),
+	random: () => { current = Math.floor(Math.random()*profiles.length); applyProfile(profiles[current]); resetSimulation(); }
+}; 
